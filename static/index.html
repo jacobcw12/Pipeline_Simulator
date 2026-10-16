@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1f23; --muted: #6b7079;
+    --border: #e3e3df; --hover: #f1f1ee; --accent: #2563eb;
+    --grid: #8a8f98;
+    --field: #16a34a; --hub: #eab308; --source: #111317;
+    --inc: #0f766e; --dec: #c2410c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121417; --panel: #1b1e23; --text: #e8e9eb; --muted: #9aa0a9;
+      --border: #2c3038; --hover: #252930; --accent: #60a5fa;
+      --grid: #7b818b;
+      --field: #4ade80; --hub: #facc15; --source: #000000;
+      --inc: #2dd4bf; --dec: #fb923c;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-columns: 350px 1fr; height: 100vh;
+  }
+  aside {
+    background: var(--panel); border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 20px 18px; display: flex; flex-direction: column; gap: 22px;
+  }
+  #map { height: 100%; background: var(--bg); }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+       color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .sub { color: var(--muted); margin: 0; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  details.corridor { border-bottom: 1px solid var(--border); }
+  details.corridor:last-child { border-bottom: 0; }
+  details.corridor > summary {
+    list-style: none; display: flex; align-items: center; gap: 10px;
+    padding: 9px 4px; cursor: pointer; font-weight: 600;
+  }
+  details.corridor > summary::-webkit-details-marker { display: none; }
+  details.corridor > summary::after { content: "›"; margin-left: auto; color: var(--muted); transition: transform .15s; }
+  details.corridor[open] > summary::after { transform: rotate(90deg); }
+  details.corridor > summary .count { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .off { opacity: .45; }
+  input[type=checkbox] { margin: 0; accent-color: var(--accent); }
+  .pipe {
+    display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 28px;
+    border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  .pipe:hover { background: var(--hover); }
+  .pipe .km { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .action {
+    margin-top: 12px; width: 100%; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    font: inherit; font-weight: 600; color: var(--text); background: var(--hover);
+    border: 1px solid var(--border);
+  }
+  .action:hover { border-color: var(--muted); }
+  .picker { width: 100%; padding: 8px 10px; border-radius: 8px; font: inherit;
+            color: var(--text); background: var(--panel); border: 1px solid var(--border); }
+  .regions { display: grid; gap: 2px; margin-top: 6px; }
+  .region { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 4px 6px;
+            border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .region:hover { background: var(--hover); }
+  .region small { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .region small.short { color: #b91c1c; }
+  @media (prefers-color-scheme: dark) { .region small.short { color: #f87171; } }
+  .action.danger { color: #b91c1c; border-color: #ef444466; }
+  @media (prefers-color-scheme: dark) { .action.danger { color: #f87171; } }
+  .action:disabled { opacity: .5; cursor: progress; }
+  .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+  #scenario[hidden], #changes[hidden], .mode[hidden] { display: none; }
+  .mode { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-bottom: 8px;
+          border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .mode button { font: inherit; font-size: 12px; padding: 6px 8px; border: 0; cursor: pointer;
+                 background: var(--panel); color: var(--muted); }
+  .mode button[aria-pressed="true"] { background: var(--hover); color: var(--text); font-weight: 600; }
+  #change-list { display: grid; gap: 2px; font-size: 13px; }
+  #change-list h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 8px 0 2px; }
+  #change-list h3:first-child { margin-top: 0; }
+  .change { display: flex; gap: 8px; align-items: baseline; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+  .change:hover { background: var(--hover); }
+  .change b { font-variant-numeric: tabular-nums; min-width: 48px; text-align: right; }
+  .change b.up { color: var(--inc); } .change b.down { color: var(--dec); }
+  #disabled-list { display: grid; gap: 4px; }
+  .disabled-item { display: flex; align-items: center; gap: 8px; font-size: 13px;
+                   padding: 5px 8px; border-radius: 6px; background: var(--hover); }
+  .disabled-item span { flex: 1; cursor: pointer; }
+  .disabled-item button { border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; font-size: 12px; }
+  .stat .delta { display: block; font-size: 12px; font-weight: 600; }
+  .stat .delta.down { color: #b91c1c; } .stat .delta.up { color: #15803d; }
+  @media (prefers-color-scheme: dark) { .stat .delta.down { color: #f87171; } .stat .delta.up { color: #4ade80; } }
+  #busy { color: var(--muted); font-size: 12px; margin: 6px 0 0; min-height: 1em; }
+  .legend .flow-scale { display: grid; gap: 4px; margin-bottom: 4px; }
+  .legend .flow-scale .bar { display: block; height: 10px; border-radius: 3px; }
+  .legend .flow-scale .ticks { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; white-space: nowrap;
+           border: 1px solid var(--border); color: var(--muted); }
+  .badge.warn { color: #b45309; border-color: #f59e0b66; }
+  .badge.bad { color: #b91c1c; border-color: #ef444466; }
+  @media (prefers-color-scheme: dark) {
+    .badge.warn { color: #fbbf24; } .badge.bad { color: #f87171; }
+  }
+  #details { border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-height: 60px; }
+  #details .empty { color: var(--muted); }
+  #details h3 { margin: 0 0 2px; font-size: 16px; }
+  #details dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 10px 0 0; }
+  #details dt { color: var(--muted); }
+  #details dd { margin: 0; font-variant-numeric: tabular-nums; }
+  #details ul { margin: 6px 0 0; padding-left: 18px; }
+  #details li { cursor: pointer; }
+  #details li:hover { text-decoration: underline; }
+  .legend { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+  .legend div { display: flex; align-items: center; gap: 10px; }
+  .legend svg { flex: none; }
+  .note { color: var(--muted); font-size: 12px; margin: 0; }
+  .leaflet-tooltip { font: 12px system-ui, sans-serif; }
+  .arrow { pointer-events: none; }
+  .leaflet-tile-pane { filter: saturate(.55) contrast(.95); }
+  @media (prefers-color-scheme: dark) {
+    .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) saturate(.4); }
+  }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+    #map { height: 55vh; order: -1; }
+    aside { border-right: 0; border-top: 1px solid var(--border); padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <header>
+    <h1>Gas Pipeline Network</h1>
+    <p class="sub">North Africa · Europe · Levant</p>
+  </header>
+  <section>
+    <div class="stats" id="stats"></div>
+    <p id="busy" aria-live="polite"></p>
+  </section>
+  <section id="scenario" hidden>
+    <h2>Disabled</h2>
+    <div id="disabled-list"></div>
+    <button class="action" id="reset">Enable everything</button>
+  </section>
+  <section id="changes" hidden>
+    <h2>Biggest flow changes</h2>
+    <div id="change-list"></div>
+  </section>
+  <section>
+    <h2>Country</h2>
+    <select id="country" class="picker" aria-label="Explore a country">
+      <option value="">All countries (overview)</option>
+    </select>
+    <p class="hint" id="country-hint">Pick a country to see its cities, regional grid and LNG send-out.</p>
+  </section>
+  <section>
+    <h2>Corridors</h2>
+    <div id="corridors"></div>
+  </section>
+  <section>
+    <h2>Details</h2>
+    <div id="details"><span class="empty">Click a node, segment or pipeline name. You can disable it to see how flows reroute.</span></div>
+  </section>
+  <section>
+    <h2>Legend</h2>
+    <div class="mode" id="mode" role="group" aria-label="Colour lines by" hidden>
+      <button data-mode="flow" aria-pressed="true">Flow</button>
+      <button data-mode="change" aria-pressed="false">Change from base</button>
+    </div>
+    <div class="legend">
+      <div class="flow-scale"><span id="scale-label">Colour = calculated flow (bcm/yr)</span><div class="bar" id="flow-bar"></div><div class="ticks" id="flow-ticks"></div></div>
+      <div><svg width="36" height="12"><line x1="2" y1="6" x2="34" y2="6" stroke="var(--grid)" stroke-width="3"/></svg>No flow</div>
+      <div><svg width="36" height="12"><line x1="2" y1="6" x2="34" y2="6" stroke="currentColor" stroke-width="5"/></svg>Line width = capacity (idle lines drawn thin)</div>
+      <div><svg width="36" height="12"><line x1="2" y1="6" x2="34" y2="6" stroke="currentColor" stroke-width="3" stroke-dasharray="6 5"/></svg>Suspended</div>
+      <div><svg width="36" height="12"><line x1="2" y1="6" x2="34" y2="6" stroke="currentColor" stroke-width="3" stroke-dasharray="1 5" stroke-linecap="round"/></svg>Out of service</div>
+      <div><svg width="36" height="12"><line x1="2" y1="6" x2="34" y2="6" stroke="var(--grid)" stroke-width="3" stroke-dasharray="2 7" stroke-linecap="round"/></svg>Disabled by you</div>
+      <div><svg width="36" height="12"><line x1="2" y1="6" x2="34" y2="6" stroke="currentColor" stroke-width="1.5"/></svg>Thin line = national grid, or regional grid when a country is picked (approximate)</div>
+      <div><svg width="36" height="12"><path d="M12 1 L24 6 L12 11 Z" fill="currentColor"/></svg>Flow direction</div>
+      <div><svg width="36" height="14"><circle cx="18" cy="7" r="6" fill="var(--field)" stroke="var(--node-ring)" stroke-width="1.5"/></svg>Gas field</div>
+      <div><svg width="36" height="14"><circle cx="18" cy="7" r="6" fill="var(--hub)" stroke="var(--node-ring)" stroke-width="1.5"/></svg>Hub</div>
+      <div><svg width="36" height="14"><circle cx="18" cy="7" r="6" fill="var(--source)" stroke="var(--node-ring)" stroke-width="1.5"/></svg>Supply source (gas entering the network)</div>
+      <div><svg width="36" height="14"><rect x="12" y="1" width="12" height="12" rx="2" fill="currentColor"/></svg>LNG export terminal</div>
+      <div><svg width="36" height="14"><rect x="13" y="2" width="10" height="10" rx="2" fill="#ffffff" stroke="var(--route-ring)" stroke-width="2"/></svg>LNG import terminal</div>
+      <div><svg width="36" height="16"><rect x="14" y="4" width="8" height="8" fill="#ffffff" stroke="currentColor" stroke-width="2.5" transform="rotate(45 18 8)"/></svg>City or region using gas (shown when a country is picked)</div>
+      <div><svg width="36" height="14"><circle cx="18" cy="7" r="5" fill="#ffffff" stroke="var(--route-ring)" stroke-width="2"/></svg>Landfall, border, junction or terminal</div>
+    </div>
+  </section>
+  <p class="note">Lines are drawn straight between points; real routes differ. Lengths, capacities and positions are approximate.</p>
+  <p class="note">Flows are calculated: field output and imports are routed to demand in each country's main cities and regions within pipeline capacities, cheapest routes first, with shortages shared out. LNG import terminals fill gaps only after reachable pipeline gas runs out, since LNG costs more. Fields can produce up to 10% extra and each region can cut up to 15% of demand, but only once cheaper options run out; LNG exports are served after domestic demand. Some pipelines and all national grids can run in reverse. Demand left after all that is the shortfall. Value = flow × ~10.55 TWh/bcm × gas price. Supply, demand and prices are assumptions set in gas_network.py. A node's value is the gas passing through it, so values overlap and shouldn't be added up.</p>
+</aside>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const css = getComputedStyle(document.documentElement);
+const cssVar = v => css.getPropertyValue(v).trim();
+const DARK = matchMedia("(prefers-color-scheme: dark)").matches;
+const INK = DARK ? "#e8e9eb" : "#1d1f23", PAPER = DARK ? "#1b1e23" : "#fff";
+const CORRIDOR_ORDER = [
+  "Field connections", "LNG import terminals", "North Africa to Europe", "Eastern Mediterranean", "Southern Gas Corridor",
+  "Russian supply", "Norwegian supply", "Intra-European", "National grids", "Regional grids",
+];
+// Flow colour ramp: blue (least) -> red (most). Interpolated in OKLCH with the
+// hue turning through purple and magenta (never green/yellow, so no rainbow),
+// keeping colour strength in the middle; lightness changes steadily so the
+// order also reads without colour vision (darker in light mode, brighter in dark).
+const FLOW_RAMP = DARK ? ["#1d4ed8", "#f87171"] : ["#60a5fa", "#b91c1c"];
+const NO_FLOW = cssVar("--grid");
+const NODE_FILL = { field: cssVar("--field"), hub: cssVar("--hub"), source: cssVar("--source") };
+// Light ring keeps filled dots visible on lines and on the dark map.
+const NODE_RING = DARK ? "#e8e9eb" : "#ffffff";
+// Route points (landfall, border, junction, terminal) are always white dots.
+const ROUTE_FILL = "#ffffff", ROUTE_RING = DARK ? "#121417" : INK;
+document.documentElement.style.setProperty("--node-ring", NODE_RING);
+document.documentElement.style.setProperty("--route-ring", ROUTE_RING);
+const DASH = { operating: null, suspended: "8 8", "out of service": "1 9" };
+const fmt = n => n.toLocaleString("en-US");
+const eur = v => {
+  for (const [size, suffix] of [[1e9, "bn"], [1e6, "m"], [1e3, "k"]])
+    if (Math.abs(v) >= size) return `€${(v / size).toFixed(1)}${suffix}`;
+  return `€${Math.round(v)}`;
+};
+const bcm = v => `${v.toFixed(2)} bcm/yr`;
+const valueRows = a => `
+  <dt>Value / year</dt><dd><b>${eur(a.value_eur_year)}</b></dd>
+  <dt>Value / day</dt><dd>${eur(a.value_eur_day)}</dd>`;
+const badge = s => s === "operating" ? "" : `<span class="badge ${s === "suspended" ? "warn" : "bad"}">${s}</span>`;
+const signed = d => Math.abs(d) < 0.05 ? "±0.0" : `${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(1)}`;
+const edgeStatus = e => e.attributes.disabled ? "disabled" : e.attributes.status;
+
+const map = L.map("map").setView([45, 15], 4);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 12,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+
+const toLinear = c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+const fromLinear = c => c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055;
+function hexToOklab(hex) {
+  const [r, g, b] = [1, 3, 5].map(i => toLinear(parseInt(hex.slice(i, i + 2), 16) / 255));
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+          1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+          0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
+}
+function oklabToHex([L, a, b]) {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3;
+  return "#" + [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+  ].map(c => Math.round(Math.min(1, Math.max(0, fromLinear(c))) * 255).toString(16).padStart(2, "0")).join("");
+}
+const toLch = ([L, a, b]) => [L, Math.hypot(a, b), Math.atan2(b, a)];
+const fromLch = ([L, C, h]) => [L, C * Math.cos(h), C * Math.sin(h)];
+const [LCH_LO, LCH_HI] = FLOW_RAMP.map(hex => toLch(hexToOklab(hex)));
+// Turn the hue the "positive" way (blue -> purple -> magenta -> red).
+const hueSpan = ((LCH_HI[2] - LCH_LO[2]) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+const rampColor = t => oklabToHex(fromLch([
+  LCH_LO[0] + (LCH_HI[0] - LCH_LO[0]) * t,
+  LCH_LO[1] + (LCH_HI[1] - LCH_LO[1]) * t,
+  LCH_LO[2] + hueSpan * t,
+]));
+// The flow scale is fixed to the base case, so colours stay comparable when
+// things are disabled.
+let maxFlow = 1;
+// National and regional grids are drawn as thin lines.
+const thinTypes = new Set(["grid", "regional"]);
+// Regional detail (cities, regional grids, LNG send-out) is shown only for
+// the country picked in the sidebar, so the overview stays clean. National
+// grids stay visible: they carry gas across countries.
+const DOMESTIC_TYPES = new Set(["regional", "lng"]);
+let selectedCountry = "", lastData = null;
+const isCity = id => nodes[id].attributes.kind === "city";
+const nodeVisible = n => n.attributes.kind !== "city" || n.attributes.country === selectedCountry;
+const edgeVisible = e => {
+  const domestic = DOMESTIC_TYPES.has(e.attributes.type) || isCity(e.source) || isCity(e.target);
+  return !domestic || [e.source, e.target].some(id => nodes[id].attributes.country === selectedCountry);
+};
+const absFlow = e => Math.abs(e.attributes.flow_bcm_year);
+const flowColor = e => absFlow(e) > 0 ? rampColor(Math.min(absFlow(e) / maxFlow, 1)) : NO_FLOW;
+
+// "Change from base" colouring: diverging, grey (no change) -> teal (more
+// flow) or orange (less flow), stronger with the size of the change.
+let baseFlow = {}, maxChange = 1, colorMode = "flow", modePicked = false;
+const [INC, DEC, MID] = [cssVar("--inc"), cssVar("--dec"), NO_FLOW].map(hexToOklab);
+const mix = (from, to, t) => oklabToHex(from.map((v, i) => v + (to[i] - v) * t));
+const changeOf = e => absFlow(e) - Math.abs(baseFlow[edgeKey(e)] ?? 0);
+const changeColor = d => Math.abs(d) < 0.05 ? oklabToHex(MID)
+  : mix(MID, d > 0 ? INC : DEC, 0.35 + 0.65 * Math.min(Math.abs(d) / maxChange, 1));
+const edgeColor = e => colorMode === "change" ? changeColor(changeOf(e)) : flowColor(e);
+
+function drawFlowLegend() {
+  const bar = document.getElementById("flow-bar"), ticks = document.getElementById("flow-ticks");
+  if (colorMode === "change") {
+    const stops = [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1].map(t => changeColor(t * maxChange));
+    bar.style.background = `linear-gradient(to right, ${stops.join(", ")})`;
+    ticks.innerHTML = [`−${maxChange.toFixed(1)}`, "0", `+${maxChange.toFixed(1)}`].map(v => `<span>${v}</span>`).join("");
+    document.getElementById("scale-label").textContent = "Colour = change in flow from base (bcm/yr)";
+  } else {
+    const stops = Array.from({ length: 9 }, (_, i) => rampColor(i / 8));
+    bar.style.background = `linear-gradient(to right, ${stops.join(", ")})`;
+    ticks.innerHTML = [0, maxFlow / 2, maxFlow].map(v => `<span>${Math.round(v)}</span>`).join("");
+    document.getElementById("scale-label").textContent = "Colour = calculated flow (bcm/yr)";
+  }
+}
+
+function setColorMode(mode) {
+  colorMode = mode;
+  document.querySelectorAll("#mode button").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === mode));
+  drawFlowLegend();
+  edges.forEach(e => {
+    e.layer.setStyle(edgeStyle(e));
+    e.arrow.setIcon(arrowIcon(e.ends[0], e.ends[1], edgeColor(e)));
+  });
+  setHighlight(highlighted ?? []);
+}
+document.getElementById("mode").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-mode]");
+  if (b) { modePicked = true; setColorMode(b.dataset.mode); }
+});
+
+const details = document.getElementById("details");
+let nodes = {}, edges = [], pipelines = {}, corridors = {}, highlighted = null;
+// Scenario state survives re-renders.
+const disabledNodes = new Set(), disabledEdges = new Set();  // node ids, "SRC>DST"
+const hiddenPipelines = new Set(), openCorridors = new Set();
+let selection = null, baseline = null, mapLayers = [], loading = false;
+const edgeKey = e => `${e.source}>${e.target}`;
+const edgeByKey = key => edges.find(e => edgeKey(e) === key);
+
+function arrowIcon(a, b, color) {
+  // Bearing in Web Mercator space, so it stays correct at every zoom.
+  const p1 = L.CRS.EPSG3857.project(a), p2 = L.CRS.EPSG3857.project(b);
+  const deg = Math.atan2(-(p2.y - p1.y), p2.x - p1.x) * 180 / Math.PI;
+  return L.divIcon({
+    className: "arrow", iconSize: [14, 14], iconAnchor: [7, 7],
+    html: `<svg width="14" height="14" style="transform:rotate(${deg}deg)"><path d="M2 2 L13 7 L2 12 Z" fill="${color}" stroke="${DARK ? "#121417" : "#fff"}" stroke-width="1"/></svg>`,
+  });
+}
+
+// Lines that carry nothing (and didn't change) are drawn thin and faint so
+// the routes gas actually takes stand out. Shut or disabled lines keep their
+// width so outages stay visible.
+const isIdle = e => absFlow(e) < 0.05 && e.attributes.status === "operating" && !e.attributes.disabled
+  && (colorMode === "flow" || Math.abs(changeOf(e)) < 0.05);
+
+function edgeStyle(e, emphasised = false) {
+  const type = e.attributes.type, idle = isIdle(e);
+  // Regional grid links are sized by the gas they carry; their capacity is
+  // only a rough allowance.
+  const width = type === "regional" ? 1.5 + Math.sqrt(absFlow(e)) * 1.2
+    : thinTypes.has(type) ? 1.5 : 1.5 + Math.sqrt(e.capacity) * 1.2;
+  return {
+    color: edgeColor(e),
+    weight: (idle ? Math.min(width, 2) : width) + (emphasised ? 3 : 0),
+    opacity: emphasised ? 1 : idle ? 0.45 : type === "grid" ? 0.7 : 0.85, lineCap: "round",
+    dashArray: e.attributes.disabled ? "2 7" : DASH[e.attributes.status],
+  };
+}
+
+function setHighlight(targets) {
+  (highlighted ?? []).forEach(t => t.edge ? t.layer.setStyle(edgeStyle(t.edge)) : t.layer.setStyle({ weight: 2 }));
+  highlighted = targets;
+  targets.forEach(t => {
+    if (t.edge) { t.layer.setStyle(edgeStyle(t.edge, true)); if (t.layer._map) t.layer.bringToFront(); }
+    else t.layer.setStyle({ weight: 4 });
+  });
+}
+
+function edgeList(es, key, label) {
+  return es.length ? `<dt>${label}</dt><dd><ul>${es.map(e =>
+    `<li data-edge="${edges.indexOf(e)}">${nodes[e[key]].name} · ${e.attributes.pipeline}</li>`).join("")}</ul></dd>` : "";
+}
+
+function showNode(id) {
+  const n = nodes[id], a = n.attributes;
+  details.innerHTML = `
+    <h3>${n.name}</h3><span class="sub">${a.country} · ${n.region}</span>
+    <dl><dt>Type</dt><dd>${a.kind === "city" ? "city / region" : a.kind.replace("_", " ").replace("lng", "LNG")}</dd>
+        ${a.supply_bcm_year != null && a.demand_bcm_year == null ? `<dt>${{ field: "Production", lng_import: "LNG send-out" }[a.kind] ?? "Supply"}</dt>
+          <dd><b>${bcm(a.supplied_bcm_year)}</b> of ${a.supply_bcm_year.toFixed(1)} normal output${a.swing_bcm_year
+            ? ` (+${a.swing_bcm_year.toFixed(1)} extra possible${a.supplied_bcm_year > a.supply_bcm_year + 0.005 ? ", <b>in use</b>" : ""})` : ""}</dd>` : ""}
+        ${a.demand_bcm_year != null ? `<dt>Demand</dt><dd>${bcm(a.demand_bcm_year)}${a.market === a.country ? "" : ` · ${a.market}`}</dd>
+          <dt>Gas delivered</dt><dd><b>${bcm(a.delivered_bcm_year)}</b> (${Math.round(100 * a.delivered_bcm_year / a.demand_bcm_year)}%)</dd>
+          ${a.demand_reduced_bcm_year > 0.005 ? `<dt>Demand cut</dt><dd>${bcm(a.demand_reduced_bcm_year)} (industry, power, households saving)</dd>` : ""}
+          ${a.unmet_bcm_year > 0.005 ? `<dt>Unmet</dt><dd>${bcm(a.unmet_bcm_year)}</dd>` : ""}` : ""}
+        <dt>Location</dt><dd>${a.lat.toFixed(2)}, ${a.lon.toFixed(2)}</dd>
+        <dt>Throughput</dt><dd>${bcm(a.throughput_bcm_year)}</dd>
+        <dt>In / out</dt><dd>${a.inflow_bcm_year.toFixed(2)} / ${a.outflow_bcm_year.toFixed(2)} bcm/yr</dd>
+        ${valueRows(a)}
+        ${edgeList(edges.filter(e => e.target === id), "source", "Receives from")}
+        ${edgeList(edges.filter(e => e.source === id), "target", "Sends to")}</dl>
+    ${a.disabled
+      ? `<button class="action" data-action="enable-node" data-id="${id}">Enable node</button>`
+      : `<button class="action danger" data-action="disable-node" data-id="${id}">Disable node</button>`}
+    ${countries().includes(a.country) && selectedCountry !== a.country
+      ? `<button class="action" data-action="explore-country" data-id="${a.country}">Explore ${a.country}'s network</button>` : ""}`;
+  selection = { type: "node", id };
+  setHighlight([{ layer: n.layer }]);
+}
+
+function showEdge(e) {
+  const a = e.attributes;
+  details.innerHTML = `
+    <h3>${a.pipeline}</h3>
+    <span class="sub">${nodes[e.source].name} → ${nodes[e.target].name}</span>
+    <dl><dt>Corridor</dt><dd>${a.corridor}</dd>
+        <dt>Length</dt><dd>${fmt(e.weight)} km</dd>
+        <dt>Capacity</dt><dd>${e.capacity} bcm/yr</dd>
+        <dt>Flow</dt><dd>${bcm(Math.abs(a.flow_bcm_year))}${a.utilization ? ` (${Math.round(a.utilization * 100)}% of capacity)` : ""}</dd>
+        ${a.flow_bcm_year < 0 ? `<dt>Direction</dt><dd><b>Reversed</b>: ${nodes[e.target].name} → ${nodes[e.source].name}</dd>` : ""}
+        ${a.reverse_capacity ? `<dt>Reverse capacity</dt><dd>${a.reverse_capacity} bcm/yr</dd>` : ""}
+        ${disabledNodes.size + disabledEdges.size ? `<dt>Change</dt><dd>${signed(changeOf(e))} bcm/yr vs base</dd>` : ""}
+        <dt>Gas price</dt><dd>€${a.price_eur_mwh}/MWh</dd>
+        ${valueRows(a)}
+        <dt>Section</dt><dd>${a.offshore ? "Offshore" : "Onshore"}</dd>
+        <dt>Status</dt><dd>${badge(edgeStatus(e)) || "operating"}</dd></dl>
+    ${a.disabled === "node"
+      ? `<p class="hint">Off because ${[e.source, e.target].filter(id => disabledNodes.has(id)).map(id => nodes[id].name).join(" and ")} is disabled.</p>`
+      : a.disabled
+        ? `<button class="action" data-action="enable-edge" data-id="${edgeKey(e)}">Enable segment</button>`
+        : `<button class="action danger" data-action="disable-edge" data-id="${edgeKey(e)}">Disable segment</button>`}
+    ${a.status !== "operating" ? `<p class="hint">This segment is ${a.status} in the base data, so it carries no gas either way.</p>` : ""}`;
+  selection = { type: "edge", id: edgeKey(e) };
+  setHighlight([{ edge: e, layer: e.layer }]);
+}
+
+function showPipeline(name, fit = true) {
+  const p = pipelines[name];
+  const km = p.edges.reduce((s, e) => s + e.weight, 0);
+  const caps = [...new Set(p.edges.map(e => e.capacity))].join(" / ");
+  const statuses = [...new Set(p.edges.map(edgeStatus))];
+  const allOff = p.edges.every(e => disabledEdges.has(edgeKey(e)));
+  const peak = p.edges.reduce((m, e) => e.attributes.value_eur_year > m.attributes.value_eur_year ? e : m);
+  details.innerHTML = `
+    <h3>${name}</h3><span class="sub">${p.corridor}</span>
+    <dl><dt>Length</dt><dd>${fmt(km)} km</dd>
+        <dt>Capacity</dt><dd>${caps} bcm/yr</dd>
+        <dt>Status</dt><dd>${statuses.map(s => badge(s) || "operating").join(" ")}</dd>
+        <dt>Flow</dt><dd>${bcm(peak.attributes.flow_bcm_year)}</dd>
+        ${valueRows(peak.attributes)}
+        ${edgeList(p.edges, "target", "Segments")}</dl>
+    ${allOff
+      ? `<button class="action" data-action="enable-pipeline" data-id="${name}">Enable whole pipeline</button>`
+      : `<button class="action danger" data-action="disable-pipeline" data-id="${name}">Disable whole pipeline</button>`}`;
+  selection = { type: "pipeline", id: name };
+  details.querySelectorAll("li").forEach(li => {
+    const e = edges[li.dataset.edge];
+    li.textContent = `${nodes[e.source].name} → ${nodes[e.target].name} · ${fmt(e.weight)} km · ${eur(e.attributes.value_eur_year)}/yr`;
+  });
+  setHighlight(p.edges.map(e => ({ edge: e, layer: e.layer })));
+  if (fit) map.fitBounds(L.featureGroup(p.edges.map(e => e.layer)).getBounds(), { padding: [60, 60], maxZoom: 7 });
+}
+
+details.addEventListener("click", ev => {
+  const btn = ev.target.closest("button[data-action]");
+  if (btn) return applyAction(btn.dataset.action, btn.dataset.id);
+  const region = ev.target.closest(".region")?.dataset.node;
+  if (region) { showNode(region); return map.setView([nodes[region].attributes.lat, nodes[region].attributes.lon], Math.max(map.getZoom(), 6)); }
+  const i = ev.target.closest("li")?.dataset.edge;
+  if (i !== undefined) { showEdge(edges[i]); map.fitBounds(edges[i].layer.getBounds(), { padding: [80, 80], maxZoom: 7 }); }
+});
+
+// Countries with demand regions, for the picker.
+const countries = () => [...new Set(Object.values(nodes)
+  .filter(n => n.attributes.demand_bcm_year != null && !n.attributes.market?.includes("LNG exports"))
+  .map(n => n.attributes.country))].sort();
+
+function selectCountry(country, fit = true) {
+  selectedCountry = country;
+  document.getElementById("country").value = country;
+  render(lastData, false);
+  if (!country) { selection = null; details.innerHTML = '<span class="empty">Click a node, segment or pipeline name. You can disable it to see how flows reroute.</span>'; return; }
+  showCountry(country);
+  if (fit) {
+    const pts = Object.values(nodes).filter(n => n.attributes.country === country)
+      .map(n => [n.attributes.lat, n.attributes.lon]);
+    map.fitBounds(L.latLngBounds(pts), { padding: [60, 60], maxZoom: 7 });
+  }
+}
+
+function showCountry(country) {
+  const inCountry = Object.values(nodes).filter(n => n.attributes.country === country);
+  const regions = inCountry.filter(n => n.attributes.demand_bcm_year != null && n.attributes.market === country);
+  const total = key => regions.reduce((s, n) => s + n.attributes[key], 0);
+  const lng = inCountry.filter(n => n.attributes.kind === "lng_import").reduce((s, n) => s + n.attributes.supplied_bcm_year, 0);
+  const fields = inCountry.filter(n => n.attributes.kind === "field").reduce((s, n) => s + n.attributes.supplied_bcm_year, 0);
+  const demand = total("demand_bcm_year");
+  details.innerHTML = `
+    <h3>${country}</h3><span class="sub">${regions.length} demand region${regions.length === 1 ? "" : "s"}</span>
+    <dl><dt>Demand</dt><dd>${bcm(demand)}</dd>
+        <dt>Gas delivered</dt><dd><b>${bcm(total("delivered_bcm_year"))}</b> (${Math.round(100 * total("delivered_bcm_year") / demand)}%)</dd>
+        ${total("demand_reduced_bcm_year") > 0.005 ? `<dt>Demand cut</dt><dd>${bcm(total("demand_reduced_bcm_year"))}</dd>` : ""}
+        ${total("unmet_bcm_year") > 0.005 ? `<dt>Shortfall</dt><dd>${bcm(total("unmet_bcm_year"))}</dd>` : ""}
+        ${fields ? `<dt>Own production</dt><dd>${bcm(fields)}</dd>` : ""}
+        ${lng ? `<dt>LNG imports</dt><dd>${bcm(lng)}</dd>` : ""}</dl>
+    <div class="regions">${regions.sort((x, y) => y.attributes.demand_bcm_year - x.attributes.demand_bcm_year).map(n => {
+      const a = n.attributes, pct = Math.round(100 * a.delivered_bcm_year / a.demand_bcm_year);
+      return `<div class="region" data-node="${n.id}"><span>${n.name}</span>
+        <small class="${pct < 99.5 ? "short" : ""}">${a.delivered_bcm_year.toFixed(1)} / ${a.demand_bcm_year.toFixed(1)} bcm/yr</small></div>`;
+    }).join("")}</div>
+    <button class="action" data-action="explore-country" data-id="">Back to overview</button>`;
+  selection = { type: "country", id: country };
+  setHighlight([]);
+}
+
+function applyAction(action, id) {
+  if (action === "explore-country") return selectCountry(id);
+  if (loading) return;
+  const [verb, what] = action.split("-");
+  const on = verb === "enable";
+  if (what === "node") on ? disabledNodes.delete(id) : disabledNodes.add(id);
+  if (what === "edge") on ? disabledEdges.delete(id) : disabledEdges.add(id);
+  if (what === "pipeline")
+    pipelines[id].edges.forEach(e => on ? disabledEdges.delete(edgeKey(e)) : disabledEdges.add(edgeKey(e)));
+  load();
+}
+
+function renderDisabledList() {
+  const list = document.getElementById("disabled-list");
+  const items = [
+    ...[...disabledNodes].map(id => ({ label: nodes[id].name, kind: "node", id })),
+    ...[...disabledEdges].map(key => {
+      const e = edgeByKey(key);
+      return { label: `${e.attributes.pipeline}: ${nodes[e.source].name} → ${nodes[e.target].name}`, kind: "edge", id: key };
+    }),
+  ];
+  document.getElementById("scenario").hidden = !items.length;
+  list.innerHTML = items.map(it => `<div class="disabled-item">
+      <span data-kind="${it.kind}" data-id="${it.id}">${it.label}</span>
+      <button data-action="enable-${it.kind}" data-id="${it.id}">Enable</button></div>`).join("");
+}
+
+document.getElementById("disabled-list").addEventListener("click", ev => {
+  const btn = ev.target.closest("button[data-action]");
+  if (btn) return applyAction(btn.dataset.action, btn.dataset.id);
+  const span = ev.target.closest("span[data-id]");
+  if (span) span.dataset.kind === "node" ? showNode(span.dataset.id) : showEdge(edgeByKey(span.dataset.id));
+});
+document.getElementById("country").addEventListener("change", ev => selectCountry(ev.target.value));
+
+document.getElementById("reset").addEventListener("click", () => {
+  disabledNodes.clear(); disabledEdges.clear(); load();
+});
+
+function setPipelineVisible(name, on) {
+  const p = pipelines[name];
+  on ? hiddenPipelines.delete(name) : hiddenPipelines.add(name);
+  p.group[on ? "addTo" : "removeFrom"](map);
+  p.checkbox.checked = on;
+  p.row.classList.toggle("off", !on);
+}
+
+function syncCorridorCheckbox(c) {
+  const states = c.pipelines.map(n => pipelines[n].checkbox.checked);
+  c.checkbox.checked = states.every(Boolean);
+  c.checkbox.indeterminate = !c.checkbox.checked && states.some(Boolean);
+  c.el.classList.toggle("off", !states.some(Boolean));
+}
+
+function buildSidebar() {
+  const root = document.getElementById("corridors");
+  const order = CORRIDOR_ORDER;
+  const rank = name => order.includes(name) ? order.indexOf(name) : order.length;
+  Object.entries(corridors).sort(([a], [b]) => rank(a) - rank(b)).forEach(([cname, c]) => {
+    c.el = document.createElement("details");
+    c.el.className = "corridor";
+    c.el.open = openCorridors.has(cname);
+    c.el.addEventListener("toggle", () => c.el.open ? openCorridors.add(cname) : openCorridors.delete(cname));
+    c.el.innerHTML = `<summary><input type="checkbox" checked>
+      ${cname}
+      <span class="count">${c.pipelines.length}</span></summary>`;
+    c.checkbox = c.el.querySelector("input");
+    c.checkbox.addEventListener("click", ev => ev.stopPropagation());
+    c.checkbox.addEventListener("change", () => {
+      c.pipelines.forEach(n => setPipelineVisible(n, c.checkbox.checked));
+      syncCorridorCheckbox(c);
+    });
+
+    c.pipelines.forEach(name => {
+      const p = pipelines[name];
+      const km = p.edges.reduce((s, e) => s + e.weight, 0);
+      const worst = ["disabled", "out of service", "suspended"].find(s => p.edges.some(e => edgeStatus(e) === s));
+      p.row = document.createElement("div");
+      p.row.className = "pipe";
+      p.row.innerHTML = `<input type="checkbox" ${hiddenPipelines.has(name) ? "" : "checked"}><span>${name}</span>${worst ? badge(worst) : ""}<span class="km">${fmt(km)} km</span>`;
+      p.checkbox = p.row.querySelector("input");
+      p.checkbox.addEventListener("click", ev => ev.stopPropagation());
+      p.checkbox.addEventListener("change", () => { setPipelineVisible(name, p.checkbox.checked); syncCorridorCheckbox(c); });
+      p.row.addEventListener("click", () => showPipeline(name));
+      p.row.classList.toggle("off", hiddenPipelines.has(name));
+      c.el.appendChild(p.row);
+    });
+    root.appendChild(c.el);
+    syncCorridorCheckbox(c);
+  });
+}
+
+function render(data, first) {
+  mapLayers.forEach(l => l.remove());
+  mapLayers = [];
+  nodes = {}; pipelines = {}; corridors = {}; highlighted = null;
+  document.getElementById("corridors").innerHTML = "";
+  data.nodes.forEach(n => nodes[n.id] = n);
+  edges = data.edges;
+  if (first) {
+    maxFlow = Math.max(...edges.map(absFlow), 1);
+    edges.forEach(e => baseFlow[edgeKey(e)] = e.attributes.flow_bcm_year);
+  }
+  const scenario = disabledNodes.size + disabledEdges.size > 0;
+  maxChange = Math.max(...edges.map(e => Math.abs(changeOf(e))), 0.1);
+  document.getElementById("mode").hidden = !scenario;
+  if (!scenario) colorMode = "flow";
+  else if (!modePicked) colorMode = "change";
+  document.querySelectorAll("#mode button").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === colorMode));
+  drawFlowLegend();
+
+  edges.forEach(e => {
+    const { pipeline: name, corridor } = e.attributes;
+    corridors[corridor] ??= { pipelines: [] };
+    if (!pipelines[name]) {
+      pipelines[name] = { corridor, group: L.layerGroup(), edges: [] };
+      if (!hiddenPipelines.has(name)) pipelines[name].group.addTo(map);
+      mapLayers.push(pipelines[name].group);
+      corridors[corridor].pipelines.push(name);
+    }
+    pipelines[name].edges.push(e);
+  });
+
+  // Draw grid links first, then pipelines from least to most flow, so the
+  // busiest routes sit on top.
+  const drawRank = e => (isIdle(e) ? 0 : 1e6) + (e.attributes.type === "grid" ? 0 : 1e5)
+    + (colorMode === "change" ? Math.abs(changeOf(e)) * 10 : absFlow(e));
+  [...edges].sort((x, y) => drawRank(x) - drawRank(y)).forEach(e => {
+    const a = [nodes[e.source].attributes.lat, nodes[e.source].attributes.lon];
+    const b = [nodes[e.target].attributes.lat, nodes[e.target].attributes.lon];
+    const p = pipelines[e.attributes.pipeline];
+    e.layer = L.polyline([a, b], edgeStyle(e))
+      .bindTooltip(`${e.attributes.pipeline}: ${nodes[e.source].name} → ${nodes[e.target].name}${e.attributes.flow_bcm_year < 0 ? " (running in reverse)" : ""} · ${eur(e.attributes.value_eur_year)}/yr`, { sticky: true })
+      .on("click", () => showEdge(e));
+    e.ends = e.attributes.flow_bcm_year < 0 ? [b, a] : [a, b];
+    e.arrow = L.marker([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], { icon: arrowIcon(...e.ends, edgeColor(e)), interactive: false });
+    if (edgeVisible(e)) { e.layer.addTo(p.group); e.arrow.addTo(p.group); }
+  });
+
+  const nodeLayer = L.layerGroup().addTo(map);
+  mapLayers.push(nodeLayer);
+  Object.values(nodes).forEach(n => {
+    const a = n.attributes;
+    const solid = a.kind in NODE_FILL, lng = a.kind.startsWith("lng"), city = a.kind === "city";
+    // Export terminals: filled square. Import terminals: white square.
+    const square = a.kind === "lng_export"
+      ? `background:${INK};border:2px solid ${PAPER}`
+      : `background:${ROUTE_FILL};border:2px solid ${ROUTE_RING}`;
+    const fade = a.disabled ? 0.35 : 1;
+    const opts = solid
+      ? { weight: 2, color: NODE_RING, fillColor: NODE_FILL[a.kind], fillOpacity: fade, opacity: fade }
+      : { weight: 2, color: ROUTE_RING, fillColor: ROUTE_FILL, fillOpacity: fade, opacity: fade };
+    if (a.disabled) opts.dashArray = "2 3";
+    n.layer = (city
+      ? L.marker([a.lat, a.lon], { icon: L.divIcon({ className: "", iconSize: [12, 12],
+          html: `<div style="width:10px;height:10px;transform:rotate(45deg);opacity:${fade};background:${ROUTE_FILL};border:2.5px solid ${INK};box-sizing:border-box"></div>` }) })
+      : lng
+      ? L.marker([a.lat, a.lon], { icon: L.divIcon({ className: "", iconSize: [12, 12],
+          html: `<div style="width:12px;height:12px;border-radius:2px;opacity:${fade};${square}"></div>` }) })
+      : L.circleMarker([a.lat, a.lon], { ...opts, radius: solid ? 7 : 5 }))
+      .bindTooltip(`${n.name} (${a.country})${a.disabled ? " · disabled" : ""} · ${eur(a.value_eur_year)}/yr`, { direction: "top", offset: [0, -6] })
+      .on("click", () => showNode(n.id));
+    if (nodeVisible(n)) n.layer.addTo(nodeLayer);
+    if (lng || city) n.layer.setStyle = () => {};  // markers have no style to highlight
+  });
+
+  buildSidebar();
+
+  renderStats(first);
+  renderDisabledList();
+  renderChanges();
+  if (first) map.fitBounds(L.featureGroup(edges.map(e => e.layer)).getBounds(), { padding: [20, 20] });
+}
+
+function renderChanges() {
+  const scenario = disabledNodes.size + disabledEdges.size > 0;
+  document.getElementById("changes").hidden = !scenario;
+  if (!scenario) return;
+  const changed = edges.map(e => [e, changeOf(e)]).filter(([, d]) => Math.abs(d) >= 0.05);
+  const top = (list) => list.slice(0, 6).map(([e, d]) => `
+    <div class="change" data-edge="${edges.indexOf(e)}"><b class="${d > 0 ? "up" : "down"}">${signed(d)}</b>
+      <span>${e.attributes.pipeline}: ${nodes[e.source].name} → ${nodes[e.target].name}</span></div>`).join("");
+  const ups = changed.filter(([, d]) => d > 0).sort((x, y) => y[1] - x[1]);
+  const downs = changed.filter(([, d]) => d < 0).sort((x, y) => x[1] - y[1]);
+  document.getElementById("change-list").innerHTML =
+    `<h3>Picked up flow (${ups.length})</h3>${top(ups) || '<span class="hint">Nothing could reroute.</span>'}
+     <h3>Lost flow (${downs.length})</h3>${top(downs)}`;
+}
+
+document.getElementById("change-list").addEventListener("click", ev => {
+  const i = ev.target.closest(".change")?.dataset.edge;
+  if (i !== undefined) { showEdge(edges[i]); map.fitBounds(edges[i].layer.getBounds(), { padding: [80, 80], maxZoom: 7 }); }
+});
+
+function renderStats(first) {
+  const all = Object.values(nodes);
+  const sum = (list, key) => list.reduce((s, n) => s + (n.attributes[key] ?? 0), 0);
+  const lines = Object.values(pipelines).filter(p => p.edges[0].attributes.type === "pipeline");
+  const fields = all.filter(n => n.attributes.kind === "field");
+  const demandNodes = all.filter(n => n.attributes.demand_bcm_year != null);
+  const values = {
+    delivered: sum(demandNodes, "delivered_bcm_year"),
+    met: 100 * sum(demandNodes, "delivered_bcm_year") / sum(demandNodes, "demand_bcm_year"),
+    cut: sum(demandNodes, "demand_reduced_bcm_year"),
+    unmet: sum(demandNodes, "unmet_bcm_year"),
+    fieldOutput: sum(fields, "supplied_bcm_year"),
+    lng: sum(all.filter(n => n.attributes.kind === "lng_import"), "supplied_bcm_year"),
+  };
+  if (first) baseline = values;
+  // For "bad" measures (cuts, shortfalls) an increase is shown as a worsening.
+  const delta = (key, unit, bad = false) => {
+    const d = values[key] - baseline[key];
+    return Math.abs(d) < 0.05 ? "" : `<span class="delta ${(d < 0) !== bad ? "down" : "up"}">${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(1)}${unit}</span>`;
+  };
+  document.getElementById("stats").innerHTML = [
+    [`${Math.round(values.delivered)} bcm/yr${delta("delivered", "")}`, "gas delivered"],
+    [`${Math.round(values.met)}%${delta("met", " pts")}`, "of demand met with gas"],
+    [`${values.cut.toFixed(1)} bcm/yr${delta("cut", "", true)}`, "demand cut"],
+    [`${values.unmet.toFixed(1)} bcm/yr${delta("unmet", "", true)}`, "shortfall"],
+    [`${Math.round(values.fieldOutput)} bcm/yr${delta("fieldOutput", "")}`, "field output"],
+    [`${Math.round(values.lng)} bcm/yr${delta("lng", "")}`, "LNG imports"],
+    [lines.length, "pipelines"],
+    [all.length, "nodes"],
+  ].map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
+}
+
+function load() {
+  const first = baseline === null;
+  const params = new URLSearchParams();
+  if (disabledNodes.size) params.set("disabled_nodes", [...disabledNodes].join(","));
+  if (disabledEdges.size) params.set("disabled_edges", [...disabledEdges].join(","));
+  loading = true;
+  document.getElementById("busy").textContent = first ? "Loading…" : "Recalculating flows…";
+  details.querySelectorAll("button.action").forEach(b => b.disabled = true);
+  return fetch(`/api/network?${params}`)
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => {
+      lastData = data;
+      render(data, first);
+      if (first) {
+        document.getElementById("country").insertAdjacentHTML("beforeend",
+          countries().map(c => `<option value="${c}">${c}</option>`).join(""));
+      }
+      // Re-open whatever was selected, now showing the new flows.
+      if (selection?.type === "node") showNode(selection.id);
+      else if (selection?.type === "edge") showEdge(edgeByKey(selection.id));
+      else if (selection?.type === "pipeline") showPipeline(selection.id, false);
+      else if (selection?.type === "country") showCountry(selection.id);
+      document.getElementById("busy").textContent = "";
+    })
+    .catch(err => {
+      document.getElementById("busy").textContent = "";
+      details.innerHTML = `<span class="empty">Couldn't load network data (${err.message}). Is server.py running?</span>`;
+    })
+    .finally(() => { loading = false; });
+}
+
+load();
+</script>
+</body>
+</html>
